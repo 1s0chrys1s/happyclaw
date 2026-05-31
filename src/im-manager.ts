@@ -116,6 +116,17 @@ export interface ConnectFeishuOptions {
   isGroupOwnerMessage?: (chatJid: string, senderImId?: string) => boolean;
   isSenderAllowedInGroup?: (chatJid: string, senderImId?: string) => boolean;
   onCardInterrupt?: (chatJid: string) => void;
+  onCardFeedback?: (opts: {
+    chatJid: string;
+    action: 'thumb_up' | 'thumb_down';
+    messageId: string;
+    userId: string;
+  }) => void | Promise<void>;
+  onCallHuman?: (opts: {
+    chatJid: string;
+    messageId: string;
+    userId: string;
+  }) => void | Promise<void>;
   onP2pSender?: (senderOpenId: string) => void;
 }
 

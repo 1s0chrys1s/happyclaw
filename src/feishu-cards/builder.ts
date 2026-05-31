@@ -99,6 +99,33 @@ export function buildAgentReplyCard(input: AgentCardInput): FeishuCardV2 {
   elements.push(...toolsPanel);
   elements.push(...footer);
 
+  // 如果状态是 done，添加反馈按钮
+  if (input.status === 'done') {
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '👍 有用' },
+          type: 'default',
+          value: { action: 'thumb_up' },
+        },
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '👎 没用' },
+          type: 'default',
+          value: { action: 'thumb_down' },
+        },
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '🙋 召唤人工' },
+          type: 'primary',
+          value: { action: 'call_human' },
+        },
+      ],
+    });
+  }
+
   const config: Record<string, unknown> = {
     update_multi: true,
     enable_forward: true,

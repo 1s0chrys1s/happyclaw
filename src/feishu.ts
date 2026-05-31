@@ -73,6 +73,19 @@ export interface ConnectOptions {
   isSenderAllowedInGroup?: (chatJid: string, senderImId?: string) => boolean;
   /** 飞书流式卡片按钮中断回调 */
   onCardInterrupt?: (chatJid: string) => void;
+  /** 飞书卡片反馈回调（点赞/点踩） */
+  onCardFeedback?: (opts: {
+    chatJid: string;
+    action: 'thumb_up' | 'thumb_down';
+    messageId: string;
+    userId: string;
+  }) => void | Promise<void>;
+  /** 召唤人工协助回调 */
+  onCallHuman?: (opts: {
+    chatJid: string;
+    messageId: string;
+    userId: string;
+  }) => void | Promise<void>;
   /** P2P（私聊）消息到达时调用，用于自动检测 bot owner 的 open_id */
   onP2pSender?: (senderOpenId: string) => void;
 }
@@ -1679,7 +1692,9 @@ export function createFeishuConnection(
           try {
             const action = data?.action?.value?.action;
             const messageId = data?.context?.open_message_id;
-            if (action !== 'interrupt_stream' || !messageId) return;
+            const userId = data?.open_id;
+
+            if (!messageId) return;
 
             const chatJid = resolveJidByMessageId(messageId);
             if (!chatJid) {
@@ -1687,14 +1702,40 @@ export function createFeishuConnection(
               return;
             }
 
-            const session = getStreamingSession(chatJid);
-            if (!session?.isActive()) {
-              logger.debug({ chatJid, messageId }, 'Card action: session not active');
-              return;
-            }
+            if (action === 'interrupt_stream') {
+              const session = getStreamingSession(chatJid);
+              if (!session?.isActive()) {
+                logger.debug({ chatJid, messageId }, 'Card action: session not active');
+                return;
+              }
 
-            logger.info({ chatJid, messageId }, 'Card action: interrupt via button');
-            connectOptions?.onCardInterrupt?.(chatJid);
+              logger.info({ chatJid, messageId }, 'Card action: interrupt via button');
+              connectOptions?.onCardInterrupt?.(chatJid);
+            } else if (action === 'thumb_up' || action === 'thumb_down') {
+              logger.info({ chatJid, messageId, action, userId }, 'Card action: feedback');
+
+              // 添加 reaction：点赞用举手，点踩用尬笑
+              // 话题群（thread）对 root message 添加，普通群聊对卡片消息添加
+              const target = parseFeishuRouteTarget(
+                chatJid.startsWith('feishu:') ? chatJid.slice('feishu:'.length) : chatJid,
+              );
+              const targetMessageId = target.rootMessageId || messageId;
+              const newEmojiType = action === 'thumb_up' ? 'MeMeMe' : 'EMBARRASSED';
+
+              // 添加新的 reaction
+              addReaction(targetMessageId, newEmojiType).catch((err) => {
+                logger.debug(
+                  { err, targetMessageId, emojiType: newEmojiType, action },
+                  'Failed to add feedback reaction',
+                );
+              });
+
+              // 调用反馈回调（存储到数据库）
+              connectOptions?.onCardFeedback?.({ chatJid, action, messageId, userId });
+            } else if (action === 'call_human') {
+              logger.info({ chatJid, messageId, userId }, 'Card action: call human');
+              connectOptions?.onCallHuman?.({ chatJid, messageId, userId });
+            }
           } catch (err) {
             logger.error({ err }, 'Error handling card action trigger');
           }

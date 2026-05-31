@@ -92,6 +92,7 @@ import {
   touchImContextBindingActivity,
   updateAgentContextInfo,
   backfillEmptyAllowlistsForUser,
+  storeMessageFeedback,
 } from './db.js';
 // feishu.js deprecated exports are no longer needed; imManager handles all connections
 import { imManager } from './im-manager.js';
@@ -8300,6 +8301,70 @@ function handleCardInterrupt(chatJid: string): void {
 }
 
 /**
+ * Handle user feedback on AI reply cards (thumb up/down).
+ */
+async function handleCardFeedback(opts: {
+  chatJid: string;
+  action: 'thumb_up' | 'thumb_down';
+  messageId: string;
+  userId: string;
+}): Promise<void> {
+  const { chatJid, action, messageId, userId } = opts;
+  logger.info(
+    { chatJid, action, messageId, userId },
+    `User feedback: ${action === 'thumb_up' ? '👍 有用' : '👎 没用'}`,
+  );
+
+  // Store feedback to database
+  try {
+    storeMessageFeedback(messageId, userId, action);
+    logger.debug({ messageId, userId, action }, 'Feedback stored to database');
+  } catch (err) {
+    logger.error({ err, messageId, userId, action }, 'Failed to store feedback');
+  }
+}
+
+/**
+ * Handle user request for human assistance.
+ */
+async function handleCallHuman(opts: {
+  chatJid: string;
+  messageId: string;
+  userId: string;
+}): Promise<void> {
+  const { chatJid, messageId, userId } = opts;
+  logger.info({ chatJid, messageId, userId }, 'User requested human assistance');
+
+  // 向群内注入系统消息
+  const user = getUserById(userId);
+  const userName = user?.display_name || user?.username || userId;
+  const systemMessage = `⚠️ 用户 ${userName} 请求人工协助，请相关人员接入`;
+
+  // 存储消息到数据库
+  const msgId = `system_${Date.now()}`;
+  storeMessageDirect(
+    msgId,
+    chatJid,
+    'system',
+    'System',
+    systemMessage,
+    new Date().toISOString(),
+    false,
+  );
+
+  // 通过 WebSocket 广播到 Web 端
+  broadcastNewMessage(chatJid, {
+    id: msgId,
+    chat_jid: chatJid,
+    sender: 'system',
+    sender_name: 'System',
+    content: systemMessage,
+    timestamp: new Date().toISOString(),
+    attachments: undefined,
+  });
+}
+
+/**
  * Connect IM channels for a specific user via imManager.
  * Reads the user's IM config and connects if enabled.
  */
@@ -8356,6 +8421,8 @@ async function connectUserIMChannels(
           isGroupOwnerMessage,
           isSenderAllowedInGroup,
           onCardInterrupt: handleCardInterrupt,
+          onCardFeedback: handleCardFeedback,
+          onCallHuman: handleCallHuman,
           onP2pSender: onFeishuP2pSender,
         })
       : Promise.resolve(false);
@@ -8856,6 +8923,8 @@ async function main(): Promise<void> {
           isGroupOwnerMessage,
           isSenderAllowedInGroup,
           onCardInterrupt: handleCardInterrupt,
+          onCardFeedback: handleCardFeedback,
+          onCallHuman: handleCallHuman,
           onP2pSender: onAdminP2pSender,
         },
       );
@@ -8979,6 +9048,8 @@ async function main(): Promise<void> {
             isGroupOwnerMessage,
             isSenderAllowedInGroup,
             onCardInterrupt: handleCardInterrupt,
+            onCardFeedback: handleCardFeedback,
+            onCallHuman: handleCallHuman,
             onP2pSender: onReloadP2pSender,
           },
         );

@@ -1261,7 +1261,27 @@ export function initDatabase(): void {
   // its position before assertSchema('users', …) matters because the
   // schema check would otherwise reject pre-v38 databases on startup.
 
-  const SCHEMA_VERSION = '38';
+  // v38 → v39: Add message_feedback table for storing user feedback (thumb up/down)
+  if (
+    !db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='message_feedback'")
+      .get()
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK(action IN ('thumb_up', 'thumb_down')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(message_id, user_id)
+      )
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_message_feedback_message_id ON message_feedback(message_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_message_feedback_user_id ON message_feedback(user_id)');
+  }
+
+  const SCHEMA_VERSION = '39';
   db.prepare(
     'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
   ).run('schema_version', SCHEMA_VERSION);
@@ -5871,6 +5891,48 @@ export function tryIncrementRedeemCodeUsage(
     ).run(code, userId, now);
     return true;
   })();
+}
+
+/**
+ * Store user feedback for a message (thumb up/down).
+ * Uses UPSERT to allow users to change their feedback.
+ */
+export function storeMessageFeedback(
+  messageId: string,
+  userId: string,
+  action: 'thumb_up' | 'thumb_down',
+): void {
+  db.prepare(
+    `INSERT INTO message_feedback (message_id, user_id, action, created_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(message_id, user_id) DO UPDATE SET
+       action = excluded.action,
+       created_at = excluded.created_at`
+  ).run(messageId, userId, action);
+}
+
+/**
+ * Get feedback statistics for a message.
+ */
+export function getMessageFeedbackStats(messageId: string): {
+  thumb_up: number;
+  thumb_down: number;
+} {
+  const rows = db
+    .prepare(
+      `SELECT action, COUNT(*) as count
+       FROM message_feedback
+       WHERE message_id = ?
+       GROUP BY action`
+    )
+    .all(messageId) as { action: string; count: number }[];
+
+  const stats = { thumb_up: 0, thumb_down: 0 };
+  for (const row of rows) {
+    if (row.action === 'thumb_up') stats.thumb_up = row.count;
+    if (row.action === 'thumb_down') stats.thumb_down = row.count;
+  }
+  return stats;
 }
 
 /**
